@@ -2,12 +2,12 @@ use std::pin::pin;
 
 use anyhow::{bail, Context, Result};
 use log::{debug, error, info};
-use pherry::headers_cache::{read_items_stream, BlockInfo};
+use pherry::headers_cache::{read_items_stream, BlockInfo, grab_headers, grab_para_headers, grab_storage_changes};
 use rand::Rng;
 use rocket::{
     data::ToByteUnit,
     futures::StreamExt,
-    get,
+    get, post,
     response::status::{BadRequest, NotFound},
     routes, State,
 };
@@ -17,11 +17,13 @@ use scale::{Decode, Encode};
 
 use crate::db::CacheDB;
 use crate::BlockNumber;
+use crate::Serve;
 use auth::Authorized;
 
 mod auth;
 
 struct App {
+    config: Serve,
     db: CacheDB,
 }
 
@@ -200,15 +202,102 @@ async fn put_storage_changes(
     .await
 }
 
-pub(crate) async fn serve(db: CacheDB, token: Option<String>) -> Result<()> {
-    let token = token.unwrap_or_else(|| {
+#[post("/fix/headers/<block>")]
+async fn post_fix_headers(
+    _auth: Authorized,
+    app: &State<App>,
+    block: BlockNumber,
+) -> Result<(), BadRequest<String>> {
+    let api = pherry::subxt_connect(&app.config.node_uri).await
+        .expect("Failed connecting to relaychain api");
+    let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
+        .expect("Failed connecting to parachain api");
+
+    let interval = app.config.justification_interval + 1;
+    let start_at = block - interval;
+    let count = interval * 2;
+
+    grab_headers(
+        &api,
+        &para_api,
+        start_at,
+        count,
+        app.config.justification_interval,
+        |info| {
+            app.db
+                .put_header(info.header.number, &info.encode())
+                .context("Failed to put record to DB")?;
+            Ok(())
+        },
+    )
+        .await
+        .context("Failed to grab headers from node");
+
+    Ok(())
+}
+
+#[post("/fix/parachain-headers/<block>")]
+async fn post_fix_parachain_headers(
+    _auth: Authorized,
+    app: &State<App>,
+    block: BlockNumber,
+) -> Result<(), BadRequest<String>> {
+    let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
+        .expect("Failed connecting to parachain api");
+
+    grab_para_headers(
+        &para_api,
+        block,
+        1,
+        |info| {
+            app.db
+                .put_para_header(info.number, &info.encode())
+                .context("Failed to put record to DB")?;
+            Ok(())
+        },
+    )
+        .await
+        .context("Failed to grab headers from node");
+
+    Ok(())
+}
+
+#[post("/fix/storage-changes/<block>")]
+async fn post_fix_storage_changes(
+    _auth: Authorized,
+    app: &State<App>,
+    block: BlockNumber,
+) -> Result<(), BadRequest<String>> {
+    let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
+        .expect("Failed connecting to parachain api");
+
+    grab_storage_changes(
+        &para_api,
+        block,
+        1,
+        10,
+        |info| {
+            app.db
+                .put_storage_changes(info.block_header.number, &info.encode())
+                .context("Failed to put record to DB")?;
+            Ok(())
+        },
+    )
+        .await
+        .context("Failed to grab storage changes from node");
+
+    Ok(())
+}
+
+pub(crate) async fn serve(db: CacheDB, config: Serve) -> Result<()> {
+    let token = config.token.clone().unwrap_or_else(|| {
         let token: [u8; 16] = rand::thread_rng().gen();
         let token = hex::encode(token);
         log::warn!("No token provided, generated a random one: {}", token);
         token
     });
     let _rocket = rocket::build()
-        .manage(App { db })
+        .manage(App { config, db })
         .manage(auth::Token { value: token })
         .mount(
             "/",
@@ -222,6 +311,9 @@ pub(crate) async fn serve(db: CacheDB, token: Option<String>) -> Result<()> {
                 put_headers,
                 put_parachain_headers,
                 put_storage_changes,
+                post_fix_headers,
+                post_fix_parachain_headers,
+                post_fix_storage_changes,
             ],
         )
         .attach(phala_rocket_middleware::TimeMeter)

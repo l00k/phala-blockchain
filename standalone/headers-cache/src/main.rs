@@ -117,7 +117,7 @@ enum Grab {
         output: String,
     },
 }
-#[derive(Args)]
+#[derive(Args, Clone)]
 struct Serve {
     /// The database file to use
     #[arg(long, default_value = "cache.db")]
@@ -251,7 +251,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn serve(config: Serve) -> anyhow::Result<()> {
     let db = db::CacheDB::open(&config.db)?;
-    let token = config.token.clone();
+    let config2 = config.clone();
 
     if let Some(upstream) = config.mirror.clone() {
         if config.grab_headers {
@@ -276,7 +276,7 @@ async fn serve(config: Serve) -> anyhow::Result<()> {
             std::process::exit(1);
         });
     }
-    web_api::serve(db, token).await?;
+    web_api::serve(db, config2).await?;
     Ok(())
 }
 
