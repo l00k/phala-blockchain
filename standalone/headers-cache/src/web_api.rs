@@ -207,23 +207,25 @@ async fn post_fix_headers(
     _auth: Authorized,
     app: &State<App>,
     block: BlockNumber,
-) -> Result<(), BadRequest<String>> {
+) -> Result<String, BadRequest<String>> {
     let api = pherry::subxt_connect(&app.config.node_uri).await
         .expect("Failed connecting to relaychain api");
     let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
         .expect("Failed connecting to parachain api");
 
-    let interval = app.config.justification_interval + 1;
+    let interval = app.config.justification_interval + 10;
     let start_at = block - interval;
     let count = interval * 2;
 
-    grab_headers(
+    let height = grab_headers(
         &api,
         &para_api,
         start_at,
         count,
         app.config.justification_interval,
         |info| {
+            log::info!("Importing relaychain header {}", info.header.number);
+
             app.db
                 .put_header(info.header.number, &info.encode())
                 .context("Failed to put record to DB")?;
@@ -231,9 +233,13 @@ async fn post_fix_headers(
         },
     )
         .await
-        .context("Failed to grab headers from node");
+        .context("Failed to grab headers from node")
+        .expect("Failed to grab headers from node");
 
-    Ok(())
+    app.db.flush()
+        .context("Failed to storage data");
+
+    Ok(height.to_string())
 }
 
 #[post("/fix/parachain-headers/<block>")]
@@ -241,15 +247,21 @@ async fn post_fix_parachain_headers(
     _auth: Authorized,
     app: &State<App>,
     block: BlockNumber,
-) -> Result<(), BadRequest<String>> {
+) -> Result<String, BadRequest<String>> {
     let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
         .expect("Failed connecting to parachain api");
 
-    grab_para_headers(
+    let interval = app.config.justification_interval + 10;
+    let start_at = block - interval;
+    let count = interval * 2;
+
+    let height = grab_para_headers(
         &para_api,
-        block,
-        1,
+        start_at,
+        count,
         |info| {
+            log::info!("Importing parachain header {}", info.number);
+
             app.db
                 .put_para_header(info.number, &info.encode())
                 .context("Failed to put record to DB")?;
@@ -257,9 +269,13 @@ async fn post_fix_parachain_headers(
         },
     )
         .await
-        .context("Failed to grab headers from node");
+        .context("Failed to grab headers from node")
+        .expect("Failed to grab headers from node");
 
-    Ok(())
+    app.db.flush()
+        .context("Failed to storage data");
+
+    Ok(height.to_string())
 }
 
 #[post("/fix/storage-changes/<block>")]
@@ -267,16 +283,18 @@ async fn post_fix_storage_changes(
     _auth: Authorized,
     app: &State<App>,
     block: BlockNumber,
-) -> Result<(), BadRequest<String>> {
+) -> Result<String, BadRequest<String>> {
     let para_api = pherry::subxt_connect(&app.config.para_node_uri).await
         .expect("Failed connecting to parachain api");
 
-    grab_storage_changes(
+    let height = grab_storage_changes(
         &para_api,
         block,
         1,
         10,
         |info| {
+            log::info!("Importing changes {}", info.block_header.number);
+
             app.db
                 .put_storage_changes(info.block_header.number, &info.encode())
                 .context("Failed to put record to DB")?;
@@ -284,9 +302,13 @@ async fn post_fix_storage_changes(
         },
     )
         .await
-        .context("Failed to grab storage changes from node");
+        .context("Failed to grab storage changes from node")
+        .expect("Failed to grab storage changes from node");
 
-    Ok(())
+    app.db.flush()
+        .context("Failed to storage data");
+
+    Ok(height.to_string())
 }
 
 pub(crate) async fn serve(db: CacheDB, config: Serve) -> Result<()> {
