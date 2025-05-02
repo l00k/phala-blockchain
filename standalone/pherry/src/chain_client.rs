@@ -87,8 +87,8 @@ pub async fn fetch_storage_at(
     };
     let mut all_storage = Vec::new();
 
-    for j in (0x00u8..=0xF0u8).step_by(0x10) {
-        for i in 0x00u8..=0xFFu8 {
+    for i in 0x00u8..=0xffu8 {
+        for j in 0x00u8..=0xffu8 {
             let prefix = StorageKey(vec![i, j]);
             let response = api
                 .extra_rpc()
@@ -99,8 +99,8 @@ pub async fn fetch_storage_at(
         }
 
         // print progress (percent 0.00%)
-        let percent = (j as f32 / 0xF0 as f32) * 100.0;
-        log::debug!("Fetching storage: {:.2}%", percent);
+        let percent = (i as f32 / 0xff as f32) * 100.0;
+        log::info!("Fetching storage: {:.2}%", percent);
     }
 
     Ok(all_storage)
