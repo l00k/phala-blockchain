@@ -85,12 +85,25 @@ pub async fn fetch_storage_at(
         Some(h) => h,
         None => api.rpc().finalized_head().await?,
     };
-    let response = api
-        .extra_rpc()
-        .storage_pairs(StorageKey(vec![]), Some(hash))
-        .await?;
-    let storage = response.into_iter().map(|(k, v)| (k.0, v.0)).collect();
-    Ok(storage)
+    let mut all_storage = Vec::new();
+
+    for j in (0x00u8..=0xF0u8).step_by(0x10) {
+        for i in 0x00u8..=0xFFu8 {
+            let prefix = StorageKey(vec![i, j]);
+            let response = api
+                .extra_rpc()
+                .storage_pairs(prefix, Some(hash))
+                .await?;
+            let storage = response.into_iter().map(|(k, v)| (k.0, v.0));
+            all_storage.extend(storage);
+        }
+
+        // print progress (percent 0.00%)
+        let percent = (j as f32 / 0xF0 as f32) * 100.0;
+        log::debug!("Fetching storage: {:.2}%", percent);
+    }
+
+    Ok(all_storage)
 }
 
 /// Fetch best next sequence for given sender considering the txpool
